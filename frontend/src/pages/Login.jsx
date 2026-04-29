@@ -22,8 +22,12 @@ export default function Login() {
 
       await signIn({ email: form.email, password: form.password });
       navigate("/");
-    } catch {
-      setError("Request failed. Please check the details and try again.");
+    } catch (err) {
+      const message =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Request failed. Please check the details and try again.";
+      setError(message);
     }
   };
 

@@ -2,25 +2,36 @@ import { Shield } from "lucide-react";
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth.js";
-import { register } from "../services/userService.js";
+import { register, requestOtp } from "../services/userService.js";
 
 export default function Login() {
   const { demoSignIn, signIn } = useAuth();
   const navigate = useNavigate();
   const [isRegistering, setIsRegistering] = useState(false);
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", otp: "" });
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const cleanOtp = (value) => String(value || "").replace(/\D/g, "").slice(0, 6);
 
   const submit = async (event) => {
     event.preventDefault();
     setError("");
+    setMessage("");
 
     try {
       if (isRegistering) {
-        await register(form);
+        await register({ ...form, otp: cleanOtp(form.otp).trim() });
+        setIsRegistering(false);
+        setForm({ ...form, otp: "" });
+        setMessage("Account created. Please request a new OTP and login.");
+        return;
       }
-
-      await signIn({ email: form.email, password: form.password });
+      await signIn({
+        email: form.email,
+        password: form.password,
+        otp: cleanOtp(form.otp).trim()
+      });
       navigate("/");
     } catch (err) {
       const message =
@@ -28,6 +39,28 @@ export default function Login() {
         err?.message ||
         "Request failed. Please check the details and try again.";
       setError(message);
+    }
+  };
+
+  const sendOtp = async () => {
+    setError("");
+    setMessage("");
+    setSendingOtp(true);
+    try {
+      await requestOtp({
+        email: form.email,
+        password: form.password,
+        purpose: isRegistering ? "register" : "login"
+      });
+      setMessage("OTP sent to your email. Please enter it below.");
+    } catch (err) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Unable to send OTP. Please try again.";
+      setError(msg);
+    } finally {
+      setSendingOtp(false);
     }
   };
 
@@ -75,6 +108,26 @@ export default function Login() {
               required
             />
           </label>
+          <label>
+            OTP
+            <input
+              value={form.otp}
+              onChange={(e) => setForm({ ...form, otp: cleanOtp(e.target.value) })}
+              placeholder="Enter 6-digit OTP"
+              inputMode="numeric"
+              maxLength={6}
+              required
+            />
+          </label>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={sendOtp}
+            disabled={!form.email || !form.password || sendingOtp}
+          >
+            {sendingOtp ? "Sending OTP..." : "Send OTP"}
+          </button>
+          {message && <p>{message}</p>}
           {error && <p className="form-error">{error}</p>}
           <button type="submit">{isRegistering ? "Create Account" : "Login"}</button>
           <button

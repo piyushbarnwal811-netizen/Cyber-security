@@ -2,10 +2,15 @@ import mongoose from "mongoose";
 
 const transactionSchema = new mongoose.Schema(
   {
-    customerName: { type: String, required: true },
-    amount: { type: Number, required: true },
-    merchant: { type: String, required: true },
-    location: { type: String, required: true },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true
+    },
+    customerName: { type: String, required: true, trim: true, minlength: 3 },
+    amount: { type: Number, required: true, min: 0.01 },
+    merchant: { type: String, required: true, trim: true, minlength: 2 },
+    location: { type: String, required: true, trim: true, minlength: 2 },
     paymentMethod: {
       type: String,
       enum: ["card", "upi", "netbanking", "wallet"],

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate:tx-user": "node scripts/assignTransactionsToUser.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -26,7 +26,12 @@ export default function Transactions() {
     try {
       await createTransaction(payload);
       await loadTransactions();
-    } catch {
+    } catch (err) {
+      const backendMessage = err?.response?.data?.message;
+      if (backendMessage) {
+        setError(backendMessage);
+        return;
+      }
       setTransactions([
         {
           ...payload,

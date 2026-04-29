@@ -10,6 +10,11 @@ export const register = async (payload) => {
   return data;
 };
 
+export const requestOtp = async (payload) => {
+  const { data } = await api.post("/users/request-otp", payload);
+  return data;
+};
+
 export const getProfile = async () => {
   const { data } = await api.get("/users/profile");
   return data;

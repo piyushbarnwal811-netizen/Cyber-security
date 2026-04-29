@@ -34,6 +34,10 @@ app.use(
       if (/^http:\/\/(localhost|127\.0\.0\.1):51\d{2}$/.test(origin)) {
         return callback(null, true);
       }
+      // Allow LAN IPs on Vite dev ports so phone/other devices can access.
+      if (/^http:\/\/(\d{1,3}\.){3}\d{1,3}:51\d{2}$/.test(origin)) {
+        return callback(null, true);
+      }
       return callback(new Error(`CORS blocked for origin: ${origin}`));
     }
   })

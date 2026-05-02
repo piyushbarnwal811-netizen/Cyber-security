@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import Otp from "../models/Otp.js";
 import User from "../models/User.js";
+import { isValidFaceSignature } from "../utils/faceSignature.js";
 import { sendEmail } from "../utils/sendEmail.js";
 
 const generateToken = (id) =>
@@ -88,7 +89,7 @@ export const requestOtp = async (req, res, next) => {
 
 export const registerUser = async (req, res, next) => {
   try {
-    const { name, email, password, otp } = req.body;
+    const { name, email, password, otp, faceSignature } = req.body;
     const normalizedEmail = normalizeEmail(email);
     const exists = await User.findOne({ email: normalizedEmail });
 
@@ -107,7 +108,17 @@ export const registerUser = async (req, res, next) => {
       throw new Error("Invalid or expired OTP");
     }
 
-    const user = await User.create({ name, email: normalizedEmail, password });
+    if (!isValidFaceSignature(faceSignature)) {
+      res.status(400);
+      throw new Error("Live face capture is required for registration");
+    }
+
+    const user = await User.create({
+      name,
+      email: normalizedEmail,
+      password,
+      faceSignature
+    });
 
     res.status(201).json({
       _id: user._id,

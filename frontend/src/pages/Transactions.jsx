@@ -24,13 +24,18 @@ export default function Transactions() {
 
   const addTransaction = async (payload) => {
     try {
-      await createTransaction(payload);
+      const response = await createTransaction(payload);
+      if (response?.requiresOtp) {
+        setError(response.message || "OTP verification required.");
+        return response;
+      }
       await loadTransactions();
+      return response;
     } catch (err) {
       const backendMessage = err?.response?.data?.message;
       if (backendMessage) {
         setError(backendMessage);
-        return;
+        return null;
       }
       setTransactions([
         {
@@ -44,6 +49,7 @@ export default function Transactions() {
         ...transactions
       ]);
       setError("Backend is not connected. The new transaction was added only in this browser session.");
+      return null;
     }
   };
 

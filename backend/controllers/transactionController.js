@@ -1,10 +1,16 @@
 import Alert from "../models/Alert.js";
+import Otp from "../models/Otp.js";
 import Transaction from "../models/Transaction.js";
+import User from "../models/User.js";
+import { faceSignatureDistance, isValidFaceSignature } from "../utils/faceSignature.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { calculateRisk } from "../utils/riskEngine.js";
 
 const hasLetter = (value) => /[A-Za-z]/.test(String(value || ""));
 const isRealName = (value) => /^[A-Za-z]+(?:\s+[A-Za-z]+)+$/.test(String(value || "").trim());
+const FACE_MATCH_MAX_DISTANCE = Number(process.env.FACE_MATCH_MAX_DISTANCE || 14);
+const normalizeOtp = (otp) => String(otp || "").trim().replace(/\s+/g, "");
+const createOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
 const validateTransactionPayload = (payload) => {
   const customerName = String(payload.customerName || "").trim();
@@ -37,12 +43,84 @@ export const createTransaction = async (req, res, next) => {
     }
 
     const risk = calculateRisk(req.body);
+    const incomingFaceSignature = String(req.body.faceSignature || "");
+    let finalStatus = risk.status;
+
+    if (risk.level === "high" || risk.level === "medium") {
+      const user = await User.findById(req.user._id).select("faceSignature");
+      if (!user?.faceSignature && risk.level === "high") {
+        res.status(403);
+        throw new Error("Face enrollment missing. Please re-register your account.");
+      }
+      if (!isValidFaceSignature(incomingFaceSignature) && risk.level === "high") {
+        res.status(403);
+        throw new Error("Live face verification is required for high-risk payments");
+      }
+
+      const canCompareFace = user?.faceSignature && isValidFaceSignature(incomingFaceSignature);
+      if (canCompareFace) {
+        const distance = faceSignatureDistance(user.faceSignature, incomingFaceSignature);
+        if (distance > FACE_MATCH_MAX_DISTANCE) {
+          if (risk.level === "high") {
+            res.status(403);
+            throw new Error(
+              `Face verification failed (distance: ${distance}). Please recapture face in better lighting and try again.`
+            );
+          }
+        } else {
+          const providedOtp = normalizeOtp(req.body.transactionOtp);
+          const now = new Date();
+          const existingOtp = await Otp.findOne({
+            email: String(req.user.email || "").toLowerCase(),
+            purpose: "transaction",
+            expiresAt: { $gt: now }
+          }).sort({ createdAt: -1 });
+
+          if (!providedOtp) {
+            const code = createOtpCode();
+            const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+            await Otp.deleteMany({
+              email: String(req.user.email || "").toLowerCase(),
+              purpose: "transaction"
+            });
+            await Otp.create({
+              email: String(req.user.email || "").toLowerCase(),
+              purpose: "transaction",
+              code,
+              expiresAt
+            });
+            await sendEmail({
+              to: req.user.email,
+              subject: `FraudShield ${risk.level}-risk transaction OTP`,
+              text: `Your transaction OTP is ${code}. It expires in 10 minutes.`
+            });
+            return res.status(202).json({
+              requiresOtp: true,
+              message: "Face matched. OTP sent to your email. Enter OTP to complete payment."
+            });
+          }
+
+          if (!existingOtp || existingOtp.code !== providedOtp) {
+            res.status(401);
+            throw new Error("Invalid or expired transaction OTP");
+          }
+          await Otp.deleteMany({
+            email: String(req.user.email || "").toLowerCase(),
+            purpose: "transaction"
+          });
+
+          finalStatus = "approved";
+        }
+      }
+    }
+
+    const { faceSignature, transactionOtp, ...transactionPayload } = req.body;
     const transaction = await Transaction.create({
-      ...req.body,
+      ...transactionPayload,
       user: req.user._id,
       riskScore: risk.score,
       riskLevel: risk.level,
-      status: risk.status,
+      status: finalStatus,
       reasons: risk.reasons
     });
 

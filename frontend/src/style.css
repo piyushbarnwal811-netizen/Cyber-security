@@ -432,6 +432,31 @@ th {
   min-width: 72px;
 }
 
+.face-capture {
+  background: #f8fafc;
+  border: 1px solid #d8e0eb;
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.face-capture video {
+  background: #0f172a;
+  border-radius: 8px;
+  min-height: 160px;
+  width: 100%;
+}
+
+.face-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.transaction-face {
+  grid-column: 1 / -1;
+}
+
 .form-error {
   color: #b91c1c;
   margin: 0;

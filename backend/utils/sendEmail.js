@@ -6,6 +6,11 @@ export const sendEmail = async ({ to, subject, text }) => {
     return;
   }
 
+  const hasSmtpConfig =
+    Boolean(process.env.SMTP_HOST) &&
+    Boolean(process.env.SMTP_USER) &&
+    Boolean(process.env.SMTP_PASS);
+
   if (process.env.RESEND_API_KEY) {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -23,14 +28,21 @@ export const sendEmail = async ({ to, subject, text }) => {
 
     if (!response.ok) {
       const details = await response.text();
-      throw new Error(`Resend failed: ${details}`);
+      // In Resend test mode, external recipients are blocked.
+      // If SMTP is configured, fallback so OTP/alerts can still be delivered.
+      if (!hasSmtpConfig) {
+        throw new Error(`Resend failed: ${details}`);
+      }
+      console.warn(`Resend failed, falling back to SMTP: ${details}`);
+    } else {
+      return;
     }
-
-    return;
   }
 
-  if (!process.env.SMTP_HOST) {
-    console.log("Email skipped: configure RESEND_API_KEY or SMTP settings");
+  if (!hasSmtpConfig) {
+    console.log(
+      "Email skipped: configure RESEND domain/from address or valid SMTP settings"
+    );
     return;
   }
 

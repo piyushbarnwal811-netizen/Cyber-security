@@ -421,6 +421,17 @@ th {
   gap: 8px;
 }
 
+.password-field {
+  display: flex;
+  gap: 8px;
+}
+
+.password-toggle {
+  background: #e2e8f0;
+  color: #0f172a;
+  min-width: 72px;
+}
+
 .form-error {
   color: #b91c1c;
   margin: 0;

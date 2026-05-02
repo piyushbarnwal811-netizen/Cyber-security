@@ -12,6 +12,7 @@ export default function Login() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [sendingOtp, setSendingOtp] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const cleanOtp = (value) => String(value || "").replace(/\D/g, "").slice(0, 6);
 
   const submit = async (event) => {
@@ -101,12 +102,22 @@ export default function Login() {
           </label>
           <label>
             Password
-            <input
-              type="password"
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
-              required
-            />
+            <div className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </label>
           <label>
             OTP

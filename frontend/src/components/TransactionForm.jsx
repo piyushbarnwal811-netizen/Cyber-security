@@ -32,7 +32,13 @@ export default function TransactionForm({ onSubmit }) {
   const [faceSignature, setFaceSignature] = useState("");
   const [transactionOtp, setTransactionOtp] = useState("");
   const [otpRequired, setOtpRequired] = useState(false);
+  const [numberMatchRequired, setNumberMatchRequired] = useState(false);
+  const [biometricOptional, setBiometricOptional] = useState(false);
+  const [challengeId, setChallengeId] = useState("");
+  const [displayNumber, setDisplayNumber] = useState("");
+  const [infoMessage, setInfoMessage] = useState("");
   const [cameraError, setCameraError] = useState("");
+  const [locationStatus, setLocationStatus] = useState("Detecting location...");
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -45,6 +51,29 @@ export default function TransactionForm({ onSubmit }) {
     []
   );
 
+  useEffect(() => {
+    const updateLocation = () => {
+      if (!navigator.geolocation) {
+        setLocationStatus("Location unavailable on this browser.");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude.toFixed(5);
+          const lon = pos.coords.longitude.toFixed(5);
+          setForm((prev) => ({ ...prev, location: `auto:${lat},${lon}` }));
+          setLocationStatus(`Auto location: ${lat}, ${lon}`);
+        },
+        () => {
+          setLocationStatus("Location permission denied. Please allow location.");
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      );
+    };
+
+    updateLocation();
+  }, []);
+
   const update = (event) => {
     setForm({ ...form, [event.target.name]: event.target.value });
   };
@@ -55,13 +84,11 @@ export default function TransactionForm({ onSubmit }) {
   const submit = async (event) => {
     event.preventDefault();
     setError("");
+    setInfoMessage("");
 
     const merchantValue =
       form.merchant === "Other" ? String(form.customMerchant || "").trim() : form.merchant;
     const payload = { ...form, merchant: merchantValue, amount: Number(form.amount) };
-    const normalizedLocation = String(payload.location || "").trim().toLowerCase();
-    const riskyLocation = ["unknown", "offshore", "blocked-region"].includes(normalizedLocation);
-    const estimatedHighRisk = payload.amount >= 100000 && riskyLocation;
     if (String(payload.customerName || "").trim().length < 3 || !isRealName(payload.customerName)) {
       setError("Customer name must be a real name (first and last name, letters only).");
       return;
@@ -74,17 +101,39 @@ export default function TransactionForm({ onSubmit }) {
       setError("Merchant must be at least 2 characters and include letters.");
       return;
     }
-    if (estimatedHighRisk && !faceSignature) {
-      setError("High-risk payment needs live face verification. Start camera and capture face.");
+    if (!String(payload.location || "").trim()) {
+      setError("Location auto-detect failed. Please allow location permission and try again.");
       return;
     }
-
-    const result = await onSubmit({ ...payload, faceSignature, transactionOtp });
+    const result = await onSubmit({
+      ...payload,
+      faceSignature,
+      transactionOtp,
+      transactionChallengeId: challengeId || undefined
+    });
     if (result?.requiresOtp) {
       setOtpRequired(true);
+      setInfoMessage(result?.message || "OTP verification required.");
+      return;
+    }
+    if (result?.requiresNumberMatch) {
+      setNumberMatchRequired(true);
+      setBiometricOptional(Boolean(result.biometricOptional));
+      setChallengeId(String(result.challengeId || ""));
+      setDisplayNumber(String(result.displayNumber || ""));
+      setInfoMessage(result?.message || "Number match required.");
+      return;
+    }
+    if (result?.requiresFaceRetry) {
+      setInfoMessage(result?.message || "Face recapture required.");
       return;
     }
     setOtpRequired(false);
+    setNumberMatchRequired(false);
+    setBiometricOptional(false);
+    setChallengeId("");
+    setDisplayNumber("");
+    setInfoMessage("");
     setTransactionOtp("");
     setForm(initialState);
     setFaceSignature("");
@@ -151,13 +200,8 @@ export default function TransactionForm({ onSubmit }) {
           required
         />
       )}
-      <input
-        name="location"
-        placeholder="Location"
-        value={form.location}
-        onChange={update}
-        required
-      />
+      <input name="location" value={form.location} readOnly />
+      <p>{locationStatus}</p>
       <select name="paymentMethod" value={form.paymentMethod} onChange={update}>
         <option value="card">Card</option>
         <option value="upi">UPI</option>
@@ -169,7 +213,7 @@ export default function TransactionForm({ onSubmit }) {
         Add Transaction
       </button>
       <div className="face-capture transaction-face">
-        <strong>Payment Face Check (required for high-risk)</strong>
+        <strong>Payment Face Check (required for medium/high risk)</strong>
         <video ref={videoRef} autoPlay muted playsInline />
         <div className="face-actions">
           <button className="secondary-button" type="button" onClick={startCamera}>
@@ -180,6 +224,17 @@ export default function TransactionForm({ onSubmit }) {
           </button>
         </div>
         {faceSignature && <p>Live face captured for verification.</p>}
+        {numberMatchRequired && (
+          <>
+            <p>
+              Number Match Required: <strong>{displayNumber}</strong>
+            </p>
+            {biometricOptional && (
+              <p>Biometric is optional. If not available on your laptop, continue with email number match.</p>
+            )}
+            <p>Check your email and click the same number, then submit transaction again.</p>
+          </>
+        )}
         {otpRequired && (
           <>
             <input
@@ -192,6 +247,7 @@ export default function TransactionForm({ onSubmit }) {
             <p>OTP required for high-risk payment. Enter OTP and submit again.</p>
           </>
         )}
+        {infoMessage && <p>{infoMessage}</p>}
         {cameraError && <p className="form-error">{cameraError}</p>}
       </div>
       {error && <p className="form-error">{error}</p>}

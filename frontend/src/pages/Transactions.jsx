@@ -25,8 +25,8 @@ export default function Transactions() {
   const addTransaction = async (payload) => {
     try {
       const response = await createTransaction(payload);
-      if (response?.requiresOtp) {
-        setError(response.message || "OTP verification required.");
+      if (response?.requiresOtp || response?.requiresNumberMatch || response?.requiresFaceRetry) {
+        setError(response.message || "Additional verification required.");
         return response;
       }
       await loadTransactions();

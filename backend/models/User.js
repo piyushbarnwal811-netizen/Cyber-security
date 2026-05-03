@@ -7,7 +7,9 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true },
     password: { type: String, required: true },
     role: { type: String, enum: ["analyst", "admin"], default: "analyst" },
-    faceSignature: { type: String, default: "" }
+    faceSignature: { type: String, default: "" },
+    totpSecret: { type: String, default: "" },
+    totpEnabled: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

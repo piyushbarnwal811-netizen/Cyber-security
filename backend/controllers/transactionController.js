@@ -1,16 +1,33 @@
 import Alert from "../models/Alert.js";
+import crypto from "crypto";
 import Otp from "../models/Otp.js";
 import Transaction from "../models/Transaction.js";
 import User from "../models/User.js";
 import { faceSignatureDistance, isValidFaceSignature } from "../utils/faceSignature.js";
+import { calculateMlRisk } from "../utils/mlRiskEngine.js";
 import { sendEmail } from "../utils/sendEmail.js";
 import { calculateRisk } from "../utils/riskEngine.js";
 
 const hasLetter = (value) => /[A-Za-z]/.test(String(value || ""));
 const isRealName = (value) => /^[A-Za-z]+(?:\s+[A-Za-z]+)+$/.test(String(value || "").trim());
-const FACE_MATCH_MAX_DISTANCE = Number(process.env.FACE_MATCH_MAX_DISTANCE || 14);
-const normalizeOtp = (otp) => String(otp || "").trim().replace(/\s+/g, "");
-const createOtpCode = () => String(Math.floor(100000 + Math.random() * 900000));
+const FACE_MATCH_MAX_DISTANCE = Number(process.env.FACE_MATCH_MAX_DISTANCE || 25);
+const createMatchNumber = () => String(Math.floor(10 + Math.random() * 90));
+const signChallenge = ({ challengeId, value, email }) =>
+  crypto
+    .createHmac("sha256", process.env.JWT_SECRET || "dev_secret")
+    .update(`${challengeId}:${value}:${String(email || "").toLowerCase()}`)
+    .digest("hex");
+
+const buildThreeChoices = (correct) => {
+  const set = new Set([correct]);
+  while (set.size < 3) set.add(createMatchNumber());
+  return [...set].sort(() => Math.random() - 0.5);
+};
+const toRiskBand = (score) => {
+  if (score >= 75) return { level: "high", status: "blocked" };
+  if (score >= 45) return { level: "medium", status: "review" };
+  return { level: "low", status: "approved" };
+};
 
 const validateTransactionPayload = (payload) => {
   const customerName = String(payload.customerName || "").trim();
@@ -42,75 +59,109 @@ export const createTransaction = async (req, res, next) => {
       throw new Error(validationError);
     }
 
-    const risk = calculateRisk(req.body);
+    const baseRisk = calculateRisk(req.body);
+    const userHistory = await Transaction.find({ user: req.user._id })
+      .select("amount merchant location paymentMethod status createdAt")
+      .sort({ createdAt: -1 })
+      .limit(100);
+    const mlRisk = calculateMlRisk({ transaction: req.body, history: userHistory });
+    const combinedScore = Math.min(100, baseRisk.score + mlRisk.scoreBoost);
+    const riskBand = toRiskBand(combinedScore);
+    const risk = {
+      score: combinedScore,
+      level: riskBand.level,
+      status: riskBand.status,
+      reasons: [...baseRisk.reasons, ...mlRisk.reasons]
+    };
     const incomingFaceSignature = String(req.body.faceSignature || "");
     let finalStatus = risk.status;
 
     if (risk.level === "high" || risk.level === "medium") {
-      const user = await User.findById(req.user._id).select("faceSignature");
-      if (!user?.faceSignature && risk.level === "high") {
-        res.status(403);
-        throw new Error("Face enrollment missing. Please re-register your account.");
-      }
-      if (!isValidFaceSignature(incomingFaceSignature) && risk.level === "high") {
-        res.status(403);
-        throw new Error("Live face verification is required for high-risk payments");
-      }
+      const user = await User.findById(req.user._id).select("faceSignature email");
+      const normalizedEmail = String(req.user.email || "").toLowerCase();
+      const providedChallengeId = String(req.body.transactionChallengeId || "").trim();
 
-      const canCompareFace = user?.faceSignature && isValidFaceSignature(incomingFaceSignature);
-      if (canCompareFace) {
+      if (risk.level === "high" || risk.level === "medium") {
+        if (!user?.faceSignature) {
+          res.status(403);
+          throw new Error("Face enrollment missing. Please re-register your account.");
+        }
+        if (!isValidFaceSignature(incomingFaceSignature)) {
+          return res.status(202).json({
+            requiresFaceRetry: true,
+            message: `${
+              risk.level === "high" ? "High" : "Medium"
+            }-risk transaction: live face capture is required.`
+          });
+        }
         const distance = faceSignatureDistance(user.faceSignature, incomingFaceSignature);
         if (distance > FACE_MATCH_MAX_DISTANCE) {
-          if (risk.level === "high") {
-            res.status(403);
-            throw new Error(
-              `Face verification failed (distance: ${distance}). Please recapture face in better lighting and try again.`
-            );
-          }
-        } else {
-          const providedOtp = normalizeOtp(req.body.transactionOtp);
-          const now = new Date();
-          const existingOtp = await Otp.findOne({
-            email: String(req.user.email || "").toLowerCase(),
-            purpose: "transaction",
-            expiresAt: { $gt: now }
-          }).sort({ createdAt: -1 });
-
-          if (!providedOtp) {
-            const code = createOtpCode();
-            const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-            await Otp.deleteMany({
-              email: String(req.user.email || "").toLowerCase(),
-              purpose: "transaction"
-            });
-            await Otp.create({
-              email: String(req.user.email || "").toLowerCase(),
-              purpose: "transaction",
-              code,
-              expiresAt
-            });
-            await sendEmail({
-              to: req.user.email,
-              subject: `FraudShield ${risk.level}-risk transaction OTP`,
-              text: `Your transaction OTP is ${code}. It expires in 10 minutes.`
-            });
-            return res.status(202).json({
-              requiresOtp: true,
-              message: "Face matched. OTP sent to your email. Enter OTP to complete payment."
-            });
-          }
-
-          if (!existingOtp || existingOtp.code !== providedOtp) {
-            res.status(401);
-            throw new Error("Invalid or expired transaction OTP");
-          }
-          await Otp.deleteMany({
-            email: String(req.user.email || "").toLowerCase(),
-            purpose: "transaction"
+          return res.status(202).json({
+            requiresFaceRetry: true,
+            message: `${
+              risk.level === "high" ? "High" : "Medium"
+            }-risk transaction: face mismatch. Please recapture and try again.`,
+            faceDistance: distance,
+            faceThreshold: FACE_MATCH_MAX_DISTANCE
           });
-
-          finalStatus = "approved";
         }
+      }
+
+      if (risk.level === "medium" || risk.level === "high") {
+        if (!providedChallengeId) {
+          const code = createMatchNumber();
+          const choiceOptions = buildThreeChoices(code);
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+          await Otp.deleteMany({ email: normalizedEmail, purpose: "transaction" });
+          const challenge = await Otp.create({
+            email: normalizedEmail,
+            purpose: "transaction",
+            code,
+            expiresAt,
+            challengeOptions: choiceOptions,
+            isVerified: false,
+            verifiedAt: null
+          });
+          const origin = process.env.API_PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+          const links = choiceOptions
+            .map((choice) => {
+              const sig = signChallenge({
+                challengeId: challenge._id.toString(),
+                value: choice,
+                email: req.user.email
+              });
+              return `${choice}: ${origin}/api/transactions/number-match/verify?challengeId=${challenge._id}&choice=${choice}&sig=${sig}`;
+            })
+            .join("\n");
+          await sendEmail({
+            to: req.user.email,
+            subject: `FraudShield ${risk.level}-risk number match`,
+            text: `On your FraudShield screen, the number is: ${code}\n\nClick the matching number below:\n${links}\n\nThis challenge expires in 10 minutes.`
+          });
+          return res.status(202).json({
+            requiresNumberMatch: true,
+            biometricOptional: true,
+            otpType: "number_match",
+            challengeId: challenge._id,
+            displayNumber: code,
+            expiresInMinutes: 10,
+            message: `${risk.level === "high" ? "High" : "Medium"}-risk transaction: complete email number match to continue. Biometric is optional if your device supports it.`
+          });
+        }
+
+        const verifiedChallenge = await Otp.findOne({
+          _id: providedChallengeId,
+          email: normalizedEmail,
+          purpose: "transaction",
+          isVerified: true,
+          expiresAt: { $gt: new Date() }
+        });
+        if (!verifiedChallenge) {
+          res.status(401);
+          throw new Error("Number-match challenge is not verified or has expired");
+        }
+        await Otp.deleteMany({ email: normalizedEmail, purpose: "transaction" });
+        finalStatus = "approved";
       }
     }
 
@@ -121,7 +172,13 @@ export const createTransaction = async (req, res, next) => {
       riskScore: risk.score,
       riskLevel: risk.level,
       status: finalStatus,
-      reasons: risk.reasons
+      reasons: risk.reasons,
+      mlMeta: {
+        confidence: mlRisk.confidence,
+        confidenceScore: mlRisk.confidenceScore,
+        scoreBoost: mlRisk.scoreBoost,
+        features: mlRisk.features
+      }
     });
 
     if (risk.level !== "low") {
@@ -153,6 +210,54 @@ export const getTransactions = async (req, res, next) => {
       createdAt: -1
     });
     res.json(transactions);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyTransactionNumberMatch = async (req, res, next) => {
+  try {
+    const challengeId = String(req.query.challengeId || "").trim();
+    const choice = String(req.query.choice || "").trim();
+    const sig = String(req.query.sig || "").trim();
+
+    if (!challengeId || !choice || !sig) {
+      res.status(400);
+      throw new Error("Missing challenge verification parameters");
+    }
+
+    const challenge = await Otp.findById(challengeId);
+    if (!challenge || challenge.purpose !== "transaction") {
+      res.status(404);
+      throw new Error("Challenge not found");
+    }
+    if (challenge.expiresAt <= new Date()) {
+      res.status(410);
+      throw new Error("Challenge expired");
+    }
+
+    const expectedSig = signChallenge({
+      challengeId,
+      value: choice,
+      email: challenge.email
+    });
+    if (sig !== expectedSig) {
+      res.status(401);
+      throw new Error("Invalid challenge signature");
+    }
+
+    if (choice !== challenge.code) {
+      res.status(401);
+      throw new Error("Wrong number selected");
+    }
+
+    challenge.isVerified = true;
+    challenge.verifiedAt = new Date();
+    await challenge.save();
+
+    res.send(
+      "<h2>FraudShield: Number Match Verified</h2><p>You can return to the app and submit the transaction now.</p>"
+    );
   } catch (error) {
     next(error);
   }

@@ -27,7 +27,13 @@ const transactionSchema = new mongoose.Schema(
       enum: ["low", "medium", "high"],
       default: "low"
     },
-    reasons: [{ type: String }]
+    reasons: [{ type: String }],
+    mlMeta: {
+      confidence: { type: String, enum: ["low", "medium", "high"], default: "low" },
+      confidenceScore: { type: Number, default: 0 },
+      scoreBoost: { type: Number, default: 0 },
+      features: { type: mongoose.Schema.Types.Mixed, default: {} }
+    }
   },
   { timestamps: true }
 );

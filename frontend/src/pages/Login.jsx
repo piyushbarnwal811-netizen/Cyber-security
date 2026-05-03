@@ -67,12 +67,14 @@ export default function Login() {
     setMessage("");
     setSendingOtp(true);
     try {
-      await requestOtp({
+      const response = await requestOtp({
         email: form.email,
         password: form.password,
         purpose: isRegistering ? "register" : "login"
       });
-      setMessage("OTP sent to your email. Please enter it below.");
+      setMessage(
+        response?.message || "OTP ready. Please enter the 6-digit code to continue."
+      );
     } catch (err) {
       const msg =
         err?.response?.data?.message ||
